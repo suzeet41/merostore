@@ -1,108 +1,136 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import axios from "axios";
 
+const API = "http://localhost:5000/api/shop/order";   // base path
+
+/* ------------------------------------------------------------------ */
+/*   INITIAL STATE                                                    */
+/* ------------------------------------------------------------------ */
 const initialState = {
-  approvalURL: null,
-  isLoading: false,
-  orderId: null,
-  orderList: [],
+  /** Returned by create‑order */
+  formUrl:   null,   // e.g. https://rc‑epay.esewa.com.np/api/epay/main/v2/form
+  formData:  null,   // { amount, total_amount, transaction_uuid, ... }
+  orderId:   null,
+
+  /** Queries */
+  orderList:    [],
   orderDetails: null,
+
+  isLoading: false,
 };
 
-export const createNewOrder = createAsyncThunk(
-  "/order/createNewOrder",
+/* ------------------------------------------------------------------ */
+/*   THUNKS                                                           */
+/* ------------------------------------------------------------------ */
+
+/* 1️⃣  Create order → get form spec */
+export const createEsewaOrder = createAsyncThunk(
+  "order/createEsewaOrder",
   async (orderData) => {
-    const response = await axios.post(
-      "http://localhost:5000/api/shop/order/create",
-      orderData
-    );
-
-    return response.data;
+    const { data } = await axios.post(`${API}/esewa/create-order`, orderData);
+    return data; // { formUrl, formData, orderId }
   }
 );
 
-export const capturePayment = createAsyncThunk(
-  "/order/capturePayment",
-  async ({ paymentId, payerId, orderId }) => {
-    const response = await axios.post(
-      "http://localhost:5000/api/shop/order/capture",
-      {
-        paymentId,
-        payerId,
-        orderId,
-      }
-    );
-
-    return response.data;
+/* 2️⃣  Verify payment from success redirect */
+export const verifyEsewaPayment = createAsyncThunk(
+  "order/verifyEsewaPayment",
+  async ({ orderId, total_amount, transaction_uuid }) => {
+    const { data } = await axios.post(`${API}/esewa/verify-payment`, {
+      orderId,
+      total_amount,
+      transaction_uuid,
+    });
+    return data; // { success, data: order }
   }
 );
 
+/* 3️⃣  Queries (unchanged) */
 export const getAllOrdersByUserId = createAsyncThunk(
-  "/order/getAllOrdersByUserId",
+  "order/getAllOrdersByUserId",
   async (userId) => {
-    const response = await axios.get(
-      `http://localhost:5000/api/shop/order/list/${userId}`
-    );
-
-    return response.data;
+    const { data } = await axios.get(`${API}/user/${userId}/orders`);
+    return data; // { success, data: [...orders] }
   }
 );
 
 export const getOrderDetails = createAsyncThunk(
-  "/order/getOrderDetails",
+  "order/getOrderDetails",
   async (id) => {
-    const response = await axios.get(
-      `http://localhost:5000/api/shop/order/details/${id}`
-    );
-
-    return response.data;
+    const { data } = await axios.get(`${API}/${id}`);
+    return data; // { success, data: order }
   }
 );
 
+/* ------------------------------------------------------------------ */
+/*   SLICE                                                            */
+/* ------------------------------------------------------------------ */
 const shoppingOrderSlice = createSlice({
   name: "shoppingOrderSlice",
   initialState,
   reducers: {
-    resetOrderDetails: (state) => {
+    resetOrderDetails(state) {
       state.orderDetails = null;
+    },
+    resetPaymentState(state) {
+      state.formUrl  = null;
+      state.formData = null;
+      state.orderId  = null;
     },
   },
   extraReducers: (builder) => {
     builder
-      .addCase(createNewOrder.pending, (state) => {
+      /* ────────── CREATE ORDER ────────── */
+      .addCase(createEsewaOrder.pending, (state) => {
         state.isLoading = true;
       })
-      .addCase(createNewOrder.fulfilled, (state, action) => {
+      .addCase(createEsewaOrder.fulfilled, (state, { payload }) => {
         state.isLoading = false;
-        state.approvalURL = action.payload.approvalURL;
-        state.orderId = action.payload.orderId;
-        sessionStorage.setItem(
-          "currentOrderId",
-          JSON.stringify(action.payload.orderId)
-        );
+        state.formUrl   = payload.formUrl;
+        state.formData  = payload.formData;
+        state.orderId   = payload.orderId;
+        sessionStorage.setItem("currentOrderId", JSON.stringify(payload.orderId));
       })
-      .addCase(createNewOrder.rejected, (state) => {
+      .addCase(createEsewaOrder.rejected, (state) => {
         state.isLoading = false;
-        state.approvalURL = null;
-        state.orderId = null;
+        state.formUrl   = null;
+        state.formData  = null;
+        state.orderId   = null;
       })
+
+      /* ────────── VERIFY PAYMENT ───────── */
+      .addCase(verifyEsewaPayment.pending, (state) => {
+        state.isLoading = true;
+      })
+      .addCase(verifyEsewaPayment.fulfilled, (state, { payload }) => {
+        state.isLoading = false;
+        // you might want to merge the confirmed order into orderDetails here
+        state.orderDetails = payload.data;
+      })
+      .addCase(verifyEsewaPayment.rejected, (state) => {
+        state.isLoading = false;
+      })
+
+      /* ────────── LIST ORDERS ─────────── */
       .addCase(getAllOrdersByUserId.pending, (state) => {
         state.isLoading = true;
       })
-      .addCase(getAllOrdersByUserId.fulfilled, (state, action) => {
+      .addCase(getAllOrdersByUserId.fulfilled, (state, { payload }) => {
         state.isLoading = false;
-        state.orderList = action.payload.data;
+        state.orderList = payload.data;
       })
       .addCase(getAllOrdersByUserId.rejected, (state) => {
         state.isLoading = false;
         state.orderList = [];
       })
+
+      /* ────────── ORDER DETAILS ───────── */
       .addCase(getOrderDetails.pending, (state) => {
         state.isLoading = true;
       })
-      .addCase(getOrderDetails.fulfilled, (state, action) => {
+      .addCase(getOrderDetails.fulfilled, (state, { payload }) => {
         state.isLoading = false;
-        state.orderDetails = action.payload.data;
+        state.orderDetails = payload.data;
       })
       .addCase(getOrderDetails.rejected, (state) => {
         state.isLoading = false;
@@ -111,6 +139,7 @@ const shoppingOrderSlice = createSlice({
   },
 });
 
-export const { resetOrderDetails } = shoppingOrderSlice.actions;
+export const { resetOrderDetails, resetPaymentState } =
+  shoppingOrderSlice.actions;
 
 export default shoppingOrderSlice.reducer;
